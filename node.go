@@ -1,6 +1,9 @@
 package shDB
 
-import "encoding/binary"
+import (
+	"bytes"
+	"encoding/binary"
+)
 
 type BNode struct {
 	Data []byte
@@ -104,4 +107,69 @@ func (node BNode) getVal(idx uint16) []byte {
 // node size in Bytes
 func (node BNode) nbytes() uint16 {
 	return node.KvPos(node.nkeys())
+}
+
+// Insert a KKey functions--------------------------------------------------
+// lookup for the the position
+func nodeLookUpLE(node BNode, key []byte) uint16 {
+	nkeys := node.nkeys()
+	found := uint16(0)
+
+	//1st keey is a copy of parenty key which will be always equal or less than the parent key
+	for i := uint16(1); i < nkeys; i++ {
+		compare := bytes.Compare(node.getKey(i), key)
+		if compare <= 0 {
+			found = 1
+		}
+		if compare >= 0 {
+			break
+		}
+	}
+	return found
+}
+
+// adding a new KV to the leaf node
+func leafInsert(new BNode, old BNode, idx uint16, key []byte, value []byte) {
+	new.setHeader(BNode_LEAF, old.nkeys()+1)
+	nodeAppendRange(new, old, 0, 0, idx)
+	nodeAppendKV(new, idx, 0, key, value)
+	nodeAppendRange(new, old, idx+1, idx, old.nkeys()-idx)
+
+}
+
+// copy KVs into the position (till idx then and after idx )
+func nodeAppendRange(new BNode, old BNode, dstNew uint16, srcOld uint16, n uint16) {
+	// Later todo - 2 assert statements
+	if n == 0 {
+		return
+	}
+	// pointers
+	for i := uint16(0); i < n; i++ {
+		new.setPtr(dstNew+i, old.getPtr(srcOld+i))
+	}
+	// offsets
+	dstBegin := new.getOffSet(dstNew)
+	srcBegin := old.getOffSet(srcOld)
+	for i := uint16(1); i <= n; i++ { // NOTE: the range is [1, n]
+		offset := dstBegin + old.getOffSet(srcOld+i) - srcBegin
+		new.setOffSet(dstNew+i, offset)
+	}
+	// KVs
+	begin := old.KvPos(srcOld)
+	end := old.KvPos(srcOld + n)
+	copy(new.Data[new.KvPos(dstNew):], old.Data[begin:end])
+}
+
+// copy new KV
+func nodeAppendKV(new BNode, idx uint16, ptr uint64, key []byte, val []byte) {
+	// ptrs
+	new.setPtr(idx, ptr)
+	// KVs
+	pos := new.KvPos(idx)
+	binary.LittleEndian.PutUint16(new.Data[pos+0:], uint16(len(key)))
+	binary.LittleEndian.PutUint16(new.Data[pos+2:], uint16(len(val)))
+	copy(new.Data[pos+4:], key)
+	copy(new.Data[pos+4+uint16(len(key)):], val)
+	// the offset of the next key
+	new.setOffSet(idx+1, new.getOffSet(idx)+4+uint16((len(key)+len(val))))
 }
